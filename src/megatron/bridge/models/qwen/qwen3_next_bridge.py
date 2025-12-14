@@ -21,8 +21,8 @@ from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
 from megatron.bridge.models.conversion.param_mapping import (
     AutoMapping,
     GatedMLPMapping,
-    GDNLinearMapping,
     GDNConv1dMapping,
+    GDNLinearMapping,
     QKVMapping,
     ReplicatedMapping,
     RMSNorm2ZeroCenteredRMSNormMapping,
@@ -48,6 +48,21 @@ class Qwen3NextBridge(MegatronModelBridge):
 
     def provider_bridge(self, hf_pretrained: PreTrainedCausalLM) -> Qwen3NextModelProvider:
         hf_config = hf_pretrained.config
+
+        # MTP (multi-token prediction) is an optional module for some checkpoints.
+        # If the HF checkpoint includes mtp.* tensors but we do not build the MTP
+        # layers on the Megatron side, a round-trip export will miss these tensors.
+        #
+        # Prefer config-driven enabling; fall back to inspecting the checkpoint keys.
+        mtp_num_layers = getattr(hf_config, "mtp_num_layers", None)
+        if mtp_num_layers is None:
+            # Some model families expose this with a different attribute name.
+            mtp_num_layers = getattr(hf_config, "num_nextn_predict_layers", None)
+        if mtp_num_layers is None:
+            try:
+                mtp_num_layers = 1 if "mtp.fc.weight" in hf_pretrained.state else 0
+            except Exception:
+                mtp_num_layers = 0
 
         provider = Qwen3NextModelProvider(
             num_layers=hf_config.num_hidden_layers,
@@ -86,7 +101,7 @@ class Qwen3NextBridge(MegatronModelBridge):
             linear_value_head_dim=hf_config.linear_value_head_dim,
             linear_num_key_heads=hf_config.linear_num_key_heads,
             linear_num_value_heads=hf_config.linear_num_value_heads,
-            mtp_num_layers=None,  # Set to 1 if need MTP
+            mtp_num_layers=int(mtp_num_layers) if mtp_num_layers is not None else 0,
         )
 
         return provider
