@@ -156,8 +156,14 @@ class ModelProviderMixin(abc.ABC, Generic[ModelT]):
             os.environ["WORLD_SIZE"] = os.environ.get("WORLD_SIZE", "1")
             os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
             os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12355")
-            torch.cuda.set_device(get_local_rank_preinit())
-            torch.distributed.init_process_group("nccl")
+            local_rank = get_local_rank_preinit()
+            torch.cuda.set_device(local_rank)
+            # Newer PyTorch versions support `device_id` which avoids NCCL warnings about
+            # unknown rank-to-GPU mapping and reduces hang risk if device selection is wrong.
+            try:
+                torch.distributed.init_process_group("nccl", device_id=torch.device("cuda", local_rank))
+            except TypeError:
+                torch.distributed.init_process_group("nccl")
 
         if not parallel_state.is_initialized():
             print("Model parallel not initialized, initializing...")
@@ -214,8 +220,12 @@ class ModelProviderMixin(abc.ABC, Generic[ModelT]):
             **model_parallel_kwargs: Additional arguments for `parallel_state.initialize_model_parallel`.
         """
         if not torch.distributed.is_initialized():
-            torch.cuda.set_device(get_local_rank_preinit())
-            torch.distributed.init_process_group("nccl")
+            local_rank = get_local_rank_preinit()
+            torch.cuda.set_device(local_rank)
+            try:
+                torch.distributed.init_process_group("nccl", device_id=torch.device("cuda", local_rank))
+            except TypeError:
+                torch.distributed.init_process_group("nccl")
 
         parallel_state.initialize_model_parallel(
             tensor_model_parallel_size=getattr(self, "tensor_model_parallel_size", 1),
