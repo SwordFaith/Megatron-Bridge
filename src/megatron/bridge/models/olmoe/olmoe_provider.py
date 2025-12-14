@@ -17,7 +17,11 @@ from typing import Callable, Optional, Union
 
 import torch
 import torch.nn.functional as F
-from megatron.core.process_groups_config import ProcessGroupCollection
+try:
+    from megatron.core.process_groups_config import ProcessGroupCollection
+except ImportError:
+    ProcessGroupCollection = None  # type: ignore
+
 from megatron.core.transformer import ModuleSpec
 from megatron.core.transformer.attention import SelfAttention as MCoreSelfAttention
 from megatron.core.transformer.attention import SelfAttentionSubmodules
@@ -105,16 +109,20 @@ class OLMoESelfAttention(MCoreSelfAttention):
         layer_number: int,
         attn_mask_type=AttnMaskType.padding,
         cp_comm_type: str = None,
-        pg_collection: ProcessGroupCollection = None,
+        pg_collection: Optional["ProcessGroupCollection"] = None,
         **kwargs,
     ):
+        kwargs = {}
+        if ProcessGroupCollection is not None:
+            kwargs["pg_collection"] = pg_collection
+
         super().__init__(
             config=config,
             submodules=submodules,
             layer_number=layer_number,
             attn_mask_type=attn_mask_type,
             cp_comm_type=cp_comm_type,
-            pg_collection=pg_collection,
+            **kwargs,
         )
 
         # Unlike Mcore QK Layernorm, OlMoE layernorm has hidden_size = hidden_size_per_attention_head * num_attention_heads
