@@ -21,6 +21,7 @@ from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
 from megatron.bridge.models.conversion.param_mapping import (
     AutoMapping,
     GatedMLPMapping,
+    GDNConv1dMapping,
     GDNLinearMapping,
     QKVMapping,
     ReplicatedMapping,
@@ -47,6 +48,21 @@ class Qwen3NextBridge(MegatronModelBridge):
 
     def provider_bridge(self, hf_pretrained: PreTrainedCausalLM) -> Qwen3NextModelProvider:
         hf_config = hf_pretrained.config
+
+        # MTP (multi-token prediction) is an optional module for some checkpoints.
+        # If the HF checkpoint includes mtp.* tensors but we do not build the MTP
+        # layers on the Megatron side, a round-trip export will miss these tensors.
+        #
+        # Prefer config-driven enabling; fall back to inspecting the checkpoint keys.
+        mtp_num_layers = getattr(hf_config, "mtp_num_layers", None)
+        if mtp_num_layers is None:
+            # Some model families expose this with a different attribute name.
+            mtp_num_layers = getattr(hf_config, "num_nextn_predict_layers", None)
+        if mtp_num_layers is None:
+            try:
+                mtp_num_layers = 1 if "mtp.fc.weight" in hf_pretrained.state else 0
+            except Exception:
+                mtp_num_layers = 0
 
         provider = Qwen3NextModelProvider(
             num_layers=hf_config.num_hidden_layers,
@@ -85,7 +101,7 @@ class Qwen3NextBridge(MegatronModelBridge):
             linear_value_head_dim=hf_config.linear_value_head_dim,
             linear_num_key_heads=hf_config.linear_num_key_heads,
             linear_num_value_heads=hf_config.linear_num_value_heads,
-            mtp_num_layers=0,  # Set to 1 if need MTP
+            mtp_num_layers=int(mtp_num_layers) if mtp_num_layers is not None else 0,
         )
 
         return provider
@@ -112,7 +128,6 @@ class Qwen3NextBridge(MegatronModelBridge):
             # Linear attention
             "decoder.layers.*.self_attention.in_proj.layer_norm_weight": "model.layers.*.input_layernorm.weight",
             "decoder.layers.*.self_attention.out_proj.weight": "model.layers.*.linear_attn.out_proj.weight",
-            "decoder.layers.*.self_attention.conv1d.weight": "model.layers.*.linear_attn.conv1d.weight",
             "decoder.layers.*.self_attention.A_log": "model.layers.*.linear_attn.A_log",
             "decoder.layers.*.self_attention.dt_bias": "model.layers.*.linear_attn.dt_bias",
             # MTP projection and norms
@@ -134,7 +149,6 @@ class Qwen3NextBridge(MegatronModelBridge):
         # Convert each dictionary entry to AutoMapping(megatron_param, hf_param)
         for megatron_param, hf_param in param_mappings.items():
             mapping_list.append(AutoMapping(megatron_param=megatron_param, hf_param=hf_param))
-        AutoMapping.register_module_type("Conv1d", "column")
         AutoMapping.register_module_type("SharedExpertMLP", "column")
         AutoMapping.register_module_type("GatedDeltaNet", "column")
 
@@ -157,6 +171,10 @@ class Qwen3NextBridge(MegatronModelBridge):
                 ),
                 # GDNLinear: Combine separate QKVZ_proj and BA_proj into single in_proj for GDN
                 # Note: Qwen3-Next does NOT have bias in the input linear projections
+                GDNConv1dMapping(
+                    megatron_param="decoder.layers.*.self_attention.conv1d.weight",
+                    hf_param="model.layers.*.linear_attn.conv1d.weight",
+                ),
                 GDNLinearMapping(
                     megatron_param="decoder.layers.*.self_attention.in_proj.weight",
                     qkvz="model.layers.*.linear_attn.in_proj_qkvz.weight",

@@ -81,6 +81,11 @@ class TestQwen3NextBridge:
         config = Mock()
         for key, value in qwen3_next_80b_a3b_config_dict.items():
             setattr(config, key, value)
+        
+        # Explicitly set optional attributes to None so Mock doesn't create them
+        config.mtp_num_layers = None
+        config.num_nextn_predict_layers = None
+        
         return config
 
     @pytest.fixture
@@ -213,8 +218,29 @@ class TestQwen3NextBridge:
 
         result = bridge.provider_bridge(mock_pretrained_qwen3_next)
 
-        # Check MTP configuration
-        assert result.mtp_num_layers == 0
+        # Check MTP configuration (default)
+        assert not result.mtp_num_layers
+
+    def test_provider_bridge_with_mtp_enabled(self, mock_pretrained_qwen3_next, mock_qwen3_next_config):
+        """Test MTP configuration when enabled in config."""
+        # Enable MTP in config
+        mock_qwen3_next_config.mtp_num_layers = 1
+        
+        bridge = Qwen3NextBridge()
+        result = bridge.provider_bridge(mock_pretrained_qwen3_next)
+        
+        assert result.mtp_num_layers == 1
+
+    def test_provider_bridge_with_mtp_legacy_config(self, mock_pretrained_qwen3_next, mock_qwen3_next_config):
+        """Test MTP configuration with legacy parameter name."""
+        # Enable MTP using legacy name
+        mock_qwen3_next_config.mtp_num_layers = None
+        mock_qwen3_next_config.num_nextn_predict_layers = 2
+        
+        bridge = Qwen3NextBridge()
+        result = bridge.provider_bridge(mock_pretrained_qwen3_next)
+        
+        assert result.mtp_num_layers == 2
 
     def test_provider_bridge_dtype_handling(self, qwen3_next_80b_a3b_config_dict):
         """Test dtype handling in provider_bridge."""
@@ -223,6 +249,8 @@ class TestQwen3NextBridge:
         for key, value in qwen3_next_80b_a3b_config_dict.items():
             setattr(config, key, value)
         config.torch_dtype = "bfloat16"
+        config.mtp_num_layers = None
+        config.num_nextn_predict_layers = None
 
         mock_pretrained = Mock(spec=PreTrainedCausalLM)
         mock_pretrained.config = config
@@ -299,7 +327,9 @@ class TestQwen3NextBridge:
         config = Mock()
         for key, value in qwen3_next_80b_a3b_config_dict.items():
             setattr(config, key, value)
-
+        config.mtp_num_layers = None
+        config.num_nextn_predict_layers = None
+    
         mock_pretrained = Mock(spec=PreTrainedCausalLM)
         mock_pretrained.config = config
         mock_pretrained.generation_config = Mock(spec=GenerationConfig)
