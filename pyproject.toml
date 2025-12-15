@@ -116,6 +116,7 @@ conversion = [
     "accelerate",
     "datasets",
     "safetensors",
+    "nvidia-modelopt[torch]>=0.37.0",
 ]
 megatron = [
     "megatron-core[dev,mlm]>=0.15.0a0,<0.17.0",
