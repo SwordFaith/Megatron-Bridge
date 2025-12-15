@@ -149,9 +149,10 @@ def main(
     for name, param in bridge.export_hf_weights(megatron_model, show_progress=False):
         if is_rank_0:
             original_param = bridge.hf_pretrained.state[name]
-            match = torch.allclose(
-                param, original_param.to(param.device), atol=1e-1
-            )  # Increased tolerance for bfloat16
+            # match = torch.allclose(
+            #     param, original_param.to(param.device), atol=1e-1
+            # )  # Increased tolerance for bfloat16
+            match = torch.equal(param, original_param.to(param.device))
             table.add_row(
                 name,
                 str(tuple(param.shape)),
