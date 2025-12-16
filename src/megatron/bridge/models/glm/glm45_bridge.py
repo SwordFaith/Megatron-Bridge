@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from megatron.core.models.gpt.gpt_model import GPTModel
@@ -23,6 +24,7 @@ from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
 from megatron.bridge.models.conversion.param_mapping import (
     AutoMapping,
     GatedMLPMapping,
+    MegatronParamMapping,
     QKVMapping,
 )
 from megatron.bridge.models.glm.glm45_provider import GLMMoEModelProvider
@@ -30,6 +32,48 @@ from megatron.bridge.models.hf_pretrained.causal_lm import PreTrainedCausalLM
 
 
 logger = logging.getLogger(__name__)
+
+
+class SharedAutoMapping(MegatronParamMapping[torch.Tensor]):
+    """
+    Mapping that distributes one Megatron parameter to multiple HF parameters.
+    Used for shared embeddings/heads in MTP layers.
+    """
+
+    def __init__(self, megatron_param: str, hf_params: List[str]):
+        self.primary_hf_param = hf_params[0]
+        self.extra_hf_params = hf_params[1:]
+        self.delegate = AutoMapping(megatron_param, self.primary_hf_param)
+        super().__init__(megatron_param, self.primary_hf_param)
+
+    def megatron_to_hf(
+        self,
+        megatron_weights: Optional[torch.Tensor],
+        megatron_module: Optional[torch.nn.Module],
+    ) -> Dict[str, torch.Tensor]:
+        res = self.delegate.megatron_to_hf(megatron_weights, megatron_module)
+        if not res:
+            return res
+
+        tensor = res.get(self.primary_hf_param)
+        if tensor is None:
+            return res
+
+        for extra in self.extra_hf_params:
+            res[extra] = tensor
+
+        return res
+
+    def hf_to_megatron(
+        self,
+        hf_weights: torch.Tensor,
+        megatron_module: torch.nn.Module,
+    ) -> torch.Tensor:
+        return self.delegate.hf_to_megatron(hf_weights, megatron_module)
+
+    def resolve(self, captures: Tuple[str, ...]) -> "MegatronParamMapping":
+        # We don't support wildcards for this specific mapping as we pass explicit lists
+        return self
 
 
 @MegatronModelBridge.register_bridge(source=Glm4MoeForCausalLM, target=GPTModel)
@@ -92,12 +136,27 @@ class GLM45Bridge(MegatronModelBridge):
     def mapping_registry(self) -> MegatronMappingRegistry:
         mapping_list = []
 
+        hf_config = getattr(self, "_hf_config", None)
+        num_mtp_layers = 0
+        num_transformer_layers = 0
+        if hf_config:
+            num_mtp_layers = getattr(hf_config, "num_nextn_predict_layers", 0)
+            num_transformer_layers = hf_config.num_hidden_layers
+
+        # Build shared params lists
+        embed_hf_params = ["model.embed_tokens.weight"]
+        head_hf_params = ["lm_head.weight"]
+
+        for mtp_layer in range(num_mtp_layers):
+            embed_hf_params.append(f"model.layers.{mtp_layer + num_transformer_layers}.embed_tokens.weight")
+            head_hf_params.append(f"model.layers.{mtp_layer + num_transformer_layers}.shared_head.head.weight")
+
+        mapping_list.append(SharedAutoMapping("embedding.word_embeddings.weight", embed_hf_params))
+        mapping_list.append(SharedAutoMapping("output_layer.weight", head_hf_params))
+
         param_mappings = {
-            # Embed
-            "embedding.word_embeddings.weight": "model.embed_tokens.weight",
-            # LM Head
+            # LM Head (Norm)
             "decoder.final_layernorm.weight": "model.norm.weight",
-            "output_layer.weight": "lm_head.weight",
         }
 
         layer_specific_mappings = {
@@ -163,12 +222,10 @@ class GLM45Bridge(MegatronModelBridge):
             ]
         )
         # optionally add MTP mappings
-        if not hasattr(self, "_hf_config"):
+        if not hf_config:
             logger.warning("No HF config found, skipping MTP mappings.")
             return MegatronMappingRegistry(*mapping_list)
-        hf_config = self._hf_config
-        num_mtp_layers = getattr(hf_config, "num_nextn_predict_layers", 0)
-        num_transformer_layers = hf_config.num_hidden_layers
+
         for mtp_layer in range(num_mtp_layers):
             for megatron_param, hf_param in layer_specific_mappings.items():
                 megatron_param = (
