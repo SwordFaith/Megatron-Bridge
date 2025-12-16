@@ -38,15 +38,15 @@ set -euo pipefail
 
 # --- Configuration ---
 
-export CUDA_VISIBLE_DEVICES=2,5,6,7
-HF_MODEL_ID="${HF_MODEL_ID:-Qwen/Qwen3-Next-80B-A3B-Instruct}"
+export CUDA_VISIBLE_DEVICES=6,7
+HF_MODEL_ID="${HF_MODEL_ID:-zai-org/GLM-4.5-Air}"
 OUTPUT_DIR="${OUTPUT_DIR:-./converted_models}"
-LOG_FILE="${LOG_FILE:-convert_qwen3-next.log}"
+LOG_FILE="${LOG_FILE:-convert_glm4.5-air.log}"
 
 # Parallelism Defaults (Matches Qwen3-Next-80B-A3B verified config)
 TP="${TP:-2}"
 PP="${PP:-1}"
-EP="${EP:-4}"
+EP="${EP:-2}"
 ETP="${ETP:-1}"
 
 MEGATRON_SAVE_PATH="${MEGATRON_SAVE_PATH:-}"
@@ -69,6 +69,7 @@ CMD_ARGS=(
     "--ep" "${EP}"
     "--etp" "${ETP}"
     "--sp"
+    "--trust-remote-code"
 )
 
 if [[ -n "${MEGATRON_SAVE_PATH}" ]]; then

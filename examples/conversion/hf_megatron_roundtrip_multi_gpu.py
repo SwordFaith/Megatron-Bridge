@@ -49,6 +49,8 @@ from megatron.bridge import AutoBridge
 from megatron.bridge.models.decorators import torchrun_main
 from megatron.bridge.models.hf_pretrained.utils import is_safe_repo
 
+# import pdb
+# pdb.set_trace()
 
 HF_MODEL_ID = "meta-llama/Llama-3.2-1B"
 console = Console()
@@ -62,6 +64,7 @@ def main(
     pp: int = 1,
     ep: int = 1,
     etp: int = 1,
+    sp: bool = False,
     megatron_save_path: str | None = None,
     megatron_load_path: str | None = None,
     trust_remote_code: bool | None = None,
@@ -85,7 +88,8 @@ def main(
             trust_remote_code=trust_remote_code,
             hf_path=hf_model_id,
         ),
-        torch_dtype=torch.bfloat16,
+        dtype="auto",
+        #torch_dtype=torch.bfloat16,
     )
 
     if megatron_load_path:
@@ -96,6 +100,7 @@ def main(
         model_provider.params_dtype = torch.bfloat16
         model_provider.expert_model_parallel_size = ep
         model_provider.expert_tensor_parallel_size = etp
+        model_provider.sequence_parallel = sp
 
         # Once all overrides are set, finalize the model provider to ensure the post initialization logic is run
         model_provider.finalize()
@@ -107,6 +112,7 @@ def main(
                 "pipeline_model_parallel_size": pp,
                 "expert_model_parallel_size": ep,
                 "expert_tensor_parallel_size": etp,
+                "sequence_parallel": sp,
                 "pipeline_dtype": torch.bfloat16,
                 "params_dtype": torch.bfloat16,
             },
@@ -122,6 +128,7 @@ def main(
         model_provider.params_dtype = torch.bfloat16
         model_provider.expert_model_parallel_size = ep
         model_provider.expert_tensor_parallel_size = etp
+        model_provider.sequence_parallel = sp
 
         # Once all overrides are set, finalize the model provider to ensure the post initialization logic is run
         model_provider.finalize()
@@ -149,6 +156,14 @@ def main(
     for name, param in bridge.export_hf_weights(megatron_model, show_progress=False):
         if is_rank_0:
             original_param = bridge.hf_pretrained.state[name]
+            if "e_score_correction_bias" in name:
+                console.print(f"name: {name}, param: {param.shape}, {param.dtype}, {param.device}, original: {original_param.shape}, {original_param.dtype}, {original_param.device}, is_equal: {torch.equal(param, original_param.to(param.device))}")
+                match = torch.equal(param, original_param.to(param.device))
+                if not match:
+                    diff = (param.float() - original_param.to(param.device).float()).abs()
+                    console.print(f"Max diff: {diff.max().item()}")
+                    console.print(f"Param (first 5): {param.flatten()[:5]}")
+                    console.print(f"Original (first 5): {original_param.flatten()[:5]}")
             # match = torch.allclose(
             #     param, original_param.to(param.device), atol=1e-1
             # )  # Increased tolerance for bfloat16
@@ -189,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--pp", type=int, default=1, help="Pipeline parallelism size")
     parser.add_argument("--ep", type=int, default=1, help="Expert parallelism size")
     parser.add_argument("--etp", type=int, default=1, help="Expert tensor parallelism size")
+    parser.add_argument("--sp", action="store_true", help="Enable sequence parallelism")
 
     parser.add_argument(
         "--megatron-save-path",
@@ -212,6 +228,7 @@ if __name__ == "__main__":
         args.pp,
         args.ep,
         args.etp,
+        args.sp,
         args.megatron_save_path,
         args.megatron_load_path,
         args.trust_remote_code,
