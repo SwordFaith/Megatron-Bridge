@@ -38,6 +38,7 @@ set -euo pipefail
 
 # --- Configuration ---
 
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 HF_MODEL_ID="${HF_MODEL_ID:-Qwen/Qwen3-Next-80B-A3B-Instruct}"
 OUTPUT_DIR="${OUTPUT_DIR:-./converted_models}"
 LOG_FILE="${LOG_FILE:-convert_qwen3-next.log}"
@@ -52,7 +53,7 @@ MEGATRON_SAVE_PATH="${MEGATRON_SAVE_PATH:-}"
 
 # Calculate World Size
 # Note: Ensure CUDA_VISIBLE_DEVICES provides enough GPUs for this WORLD_SIZE.
-WORLD_SIZE="${WORLD_SIZE:-$((TP * PP * EP))}"
+WORLD_SIZE="${WORLD_SIZE:-$(( (TP * PP > EP * ETP) ? TP * PP : EP * ETP ))}"
 
 mkdir -p "${OUTPUT_DIR}"
 
